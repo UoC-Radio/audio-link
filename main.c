@@ -31,12 +31,13 @@ struct options
   gboolean send;
   gboolean receive;
   gint latency;
-	gint remote_port;
-	gint bind_port;
+  gint remote_port;
+  gint bind_port;
   gint bitrate;
   gint channels;
-	gchar *remote_address;
+  gchar *remote_address;
   gchar *bind_address;
+  gchar *jack_name;
 };
 
 static void
@@ -179,7 +180,7 @@ rtpbin_pad_added (GstElement *rtpbin, GstPad *src, gpointer user_data)
     gst_element_sync_state_with_parent (self->media_bin);
   }
   else if (g_str_has_prefix (GST_PAD_NAME (src), "send_rtp_src_")) {
-    g_autoptr (GstElement) rtpsink = 
+    g_autoptr (GstElement) rtpsink =
         gst_bin_get_by_name (GST_BIN (self->pipeline), "rtpsink");
     sink = gst_element_get_static_pad (rtpsink, "sink");
     gst_pad_link (src, sink);
@@ -255,6 +256,7 @@ init_receive (struct audio_link *self, const struct options *options)
     "parser::sample-rate", options->bitrate,
     "parser::num-channels", options->channels,
     "audio_sink::connect", 0 /* Don't automatically connect ports to physical ports */,
+    "audio_sink::client-name", options->jack_name,
     NULL);
 
   bus = gst_pipeline_get_bus (GST_PIPELINE (self->pipeline));
@@ -343,6 +345,7 @@ init_send (struct audio_link *self, const struct options *options)
   gst_child_proxy_set (GST_CHILD_PROXY (self->media_bin),
     "capsfilter::caps", media_caps,
     "audio_src::connect", 0 /* Don't automatically connect ports to physical ports */,
+    "audio_src::client-name", options->jack_name,
     NULL);
 
   bus = gst_pipeline_get_bus (GST_PIPELINE (self->pipeline));
@@ -383,6 +386,7 @@ main (gint argc, gchar **argv)
     .bind_port = DEFAULT_BIND_PORT,
     .bitrate = DEFAULT_BITRATE,
     .channels = DEFAULT_CHANNELS,
+    .jack_name = NULL,
   };
   g_autoptr (GOptionContext) context = NULL;
   g_autoptr (GError) error = NULL;
@@ -404,7 +408,7 @@ main (gint argc, gchar **argv)
       G_STRINGIFY (DEFAULT_REMOTE_PORT) },
     { "bind-address", 'b', 0, G_OPTION_ARG_STRING,
       &options.bind_address,
-      "Local address (IPv4 / IPv6) to bind to", 
+      "Local address (IPv4 / IPv6) to bind to",
       G_STRINGIFY (DEFAULT_BIND_ADDRESS) },
     { "bind-port", 't', 0, G_OPTION_ARG_INT,
         &options.bind_port, "Port to bind to",
@@ -415,6 +419,8 @@ main (gint argc, gchar **argv)
     { "channels", 'n', 0, G_OPTION_ARG_INT,
         &options.channels, "Number of audio channels",
         G_STRINGIFY (DEFAULT_CHANNELS) },
+    { "jack-name", 'j', 0, G_OPTION_ARG_STRING,
+       &options.jack_name, "The name of the Jack client", "" },
     {NULL}
   };
 
@@ -432,7 +438,7 @@ main (gint argc, gchar **argv)
     return 1;
   }
 
-  if ((options.send && options.receive) || 
+  if ((options.send && options.receive) ||
       (!options.send && !options.receive)) {
     g_printerr ("--receive or --send must be specified (but not both)\n");
     return 2;
