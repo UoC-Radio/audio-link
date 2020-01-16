@@ -343,6 +343,7 @@ init_send (struct audio_link *self, const struct options *options)
     "rtcpsink::async", FALSE,
     NULL);
   gst_child_proxy_set (GST_CHILD_PROXY (self->media_bin),
+    "payloader::config-interval", 2,
     "capsfilter::caps", media_caps,
     "audio_src::connect", 0 /* Don't automatically connect ports to physical ports */,
     "audio_src::client-name", options->jack_name,
