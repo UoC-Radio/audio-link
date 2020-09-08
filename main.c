@@ -125,37 +125,6 @@ request_aux_receiver (GstElement *rtpbin, guint sessid, gpointer user_data)
   return bin;
 }
 
-static GstElement *
-request_aux_sender (GstElement *rtpbin, guint sessid, gpointer user_data)
-{
-  GstElement *rtx, *bin;
-  GstPad *pad;
-  gchar *name;
-  GstStructure *pt_map;
-
-  bin = gst_bin_new (NULL);
-  rtx = gst_element_factory_make ("rtprtxsend", NULL);
-  pt_map = gst_structure_new ("application/x-rtp-pt-map",
-    "96", G_TYPE_UINT, 97, NULL);
-  g_object_set (rtx, "payload-type-map", pt_map, NULL);
-  gst_structure_free (pt_map);
-  gst_bin_add (GST_BIN (bin), rtx);
-
-  pad = gst_element_get_static_pad (rtx, "src");
-  name = g_strdup_printf ("src_%u", sessid);
-  gst_element_add_pad (bin, gst_ghost_pad_new (name, pad));
-  g_free (name);
-  gst_object_unref (pad);
-
-  pad = gst_element_get_static_pad (rtx, "sink");
-  name = g_strdup_printf ("sink_%u", sessid);
-  gst_element_add_pad (bin, gst_ghost_pad_new (name, pad));
-  g_free (name);
-  gst_object_unref (pad);
-
-  return bin;
-}
-
 static GstCaps *
 request_pt_map (GstElement *rtpbin, guint session, guint pt, gpointer user_data)
 {
@@ -292,29 +261,17 @@ init_send (struct audio_link *self, const struct options *options)
   g_autoptr (GstBus) bus = NULL;
   g_autoptr (GstElement) rtpbin = NULL;
 
-  if (!(self->pipeline = gst_parse_launch ("rtpbin name=rtpbin "
-    "udpsink name=rtpsink "
-    "udpsrc name=rtcpsrc ! rtpbin.recv_rtcp_sink_0 "
-    "rtpbin.send_rtcp_src_0 ! udpsink name=rtcpsink", &error)))
+  if (!(self->pipeline = gst_parse_launch(
+    "jackaudiosrc name=audio_src ! "
+    "capsfilter name=capsfilter !"
+    "rtpgstpay name=payloader !"
+    "rtpsink name=rtpsink ",
+    &error)))
   {
-    g_printerr ("constructing the pipeline failed: %s\n",
-        error->message);
+    g_printerr("constructing the pipeline failed: %s\n",
+               error->message);
     return FALSE;
   }
-
-  if (!(self->media_bin = gst_parse_bin_from_description (
-    "jackaudiosrc name=audio_src ! capsfilter name=capsfilter"
-    " ! rtpgstpay name=payloader", TRUE, &error)))
-  {
-    g_printerr ("constructing the sink bin failed: %s\n",
-        error->message);
-    g_object_unref (self->pipeline);
-    return FALSE;
-  }
-
-  /* consume the floating reference so that we always hold one ref */
-  g_object_ref_sink (self->media_bin);
-  gst_bin_add (GST_BIN (self->pipeline), self->media_bin);
 
   self->payload_caps = gst_caps_new_simple ("application/x-rtp",
     "media", G_TYPE_STRING, "application",
@@ -330,19 +287,9 @@ init_send (struct audio_link *self, const struct options *options)
     NULL);
 
   gst_child_proxy_set (GST_CHILD_PROXY (self->pipeline),
-    "rtpbin::latency", options->latency,
-    "rtpbin::do-retransmission", TRUE,
-    "rtpbin::rtp-profile", GST_RTP_PROFILE_AVPF,
-    "rtcpsrc::address", options->bind_address,
-    "rtcpsrc::port", options->bind_port + 1,
-    "rtpsink::host", options->remote_address,
+    "rtpsink::address", options->remote_address,
     "rtpsink::port", options->remote_port,
-    "rtcpsink::host", options->remote_address,
-    "rtcpsink::port", options->remote_port + 1,
-    "rtcpsink::sync", FALSE,
-    "rtcpsink::async", FALSE,
-    NULL);
-  gst_child_proxy_set (GST_CHILD_PROXY (self->media_bin),
+    "rtpsink::latency", options->latency,
     "payloader::config-interval", 2,
     "capsfilter::caps", media_caps,
     "audio_src::connect", 0 /* Don't automatically connect ports to physical ports */,
@@ -352,23 +299,6 @@ init_send (struct audio_link *self, const struct options *options)
   bus = gst_pipeline_get_bus (GST_PIPELINE (self->pipeline));
   g_signal_connect (bus, "message::error", G_CALLBACK (error_cb), self);
   gst_bus_add_signal_watch (bus);
-
-  rtpbin = gst_bin_get_by_name (GST_BIN (self->pipeline), "rtpbin");
-  g_signal_connect (rtpbin, "request-aux-sender",
-    G_CALLBACK (request_aux_sender), self);
-  g_signal_connect (rtpbin, "request-pt-map",
-    G_CALLBACK (request_pt_map), self);
-  g_signal_connect (rtpbin, "pad-added",
-    G_CALLBACK (rtpbin_pad_added), self);
-  g_signal_connect (rtpbin, "pad-removed",
-    G_CALLBACK (rtpbin_pad_removed), self);
-
-  /* This link needs to happen after we have connected the
-   * "request-aux-sender" signal, because rtpbin internally
-   * calls our callback to create rtprtxsend while it is
-   * creating the "send_rtp_sink_0" pad
-   */
-  gst_element_link_pads (self->media_bin, "src", rtpbin, "send_rtp_sink_0");
 
   return TRUE;
 }
